@@ -118,7 +118,6 @@ def generate_battle_id() -> str:
 
 
 def process_battle(db: Session, player: Player, character: Character, enemy: Enemy, skill_id: int = None) -> dict:
-    battle_id = generate_battle_id()
     battle_log = []
     cooldowns = {}
     
@@ -135,24 +134,24 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
     enemy_current_hp = enemy.max_hp
     
     active_cooldowns = db.query(SkillCooldown).filter_by(
-        player_id=player.id, character_id=character.id, battle_id=battle_id
+        player_id=player.id, character_id=character.id
     ).all()
     
     for cd in active_cooldowns:
         if cd.remaining_turns > 0:
-            cd.remaining_turns -= 1
             cooldowns[str(cd.skill_id)] = cd.remaining_turns
     
     player_turn = player_speed >= enemy.speed
     
     victory = False
     round_num = 1
+    skill_used_this_battle = False
     
     while player_current_hp > 0 and enemy_current_hp > 0 and round_num <= 50:
         battle_log.append(f"--- 第 {round_num} 回合 ---")
         
         if player_turn:
-            if skill_id and player_current_mp > 0:
+            if skill_id and player_current_mp > 0 and not skill_used_this_battle:
                 skill = db.query(Skill).filter_by(id=skill_id).first()
                 char_skill = db.query(Character).filter_by(id=character.id).first()
                 
@@ -162,7 +161,9 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
                         character_id=character.id, skill_id=skill_id
                     ).first()
                     
-                    if has_skill and str(skill_id) not in cooldowns:
+                    cd_remaining = cooldowns.get(str(skill_id), 0)
+                    
+                    if has_skill and cd_remaining <= 0:
                         effect = calculate_skill_effect(skill, character, equipment_stats)
                         
                         if player_current_mp >= effect["mp_cost"]:
@@ -181,7 +182,7 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
                             if effect["cooldown"] > 0:
                                 existing_cd = db.query(SkillCooldown).filter_by(
                                     player_id=player.id, character_id=character.id,
-                                    skill_id=skill_id, battle_id=battle_id
+                                    skill_id=skill_id
                                 ).first()
                                 if existing_cd:
                                     existing_cd.remaining_turns = effect["cooldown"]
@@ -190,18 +191,19 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
                                         player_id=player.id,
                                         character_id=character.id,
                                         skill_id=skill_id,
-                                        remaining_turns=effect["cooldown"],
-                                        battle_id=battle_id
+                                        remaining_turns=effect["cooldown"]
                                     )
                                     db.add(cd)
                                 cooldowns[str(skill_id)] = effect["cooldown"]
+                            
+                            skill_used_this_battle = True
                         else:
                             basic_damage = max(1, player_attack - enemy.defense)
                             enemy_current_hp -= basic_damage
                             battle_log.append(f"魔法不足！{character.name} 进行普通攻击，对 {enemy.name} 造成 {basic_damage} 点伤害！")
                     else:
-                        if str(skill_id) in cooldowns:
-                            battle_log.append(f"{skill.name} 冷却中，剩余 {cooldowns[str(skill_id)]} 回合")
+                        if cd_remaining > 0:
+                            battle_log.append(f"{skill.name} 冷却中，剩余 {cd_remaining} 回合，只能普通攻击")
                         basic_damage = max(1, player_attack - enemy.defense)
                         enemy_current_hp -= basic_damage
                         battle_log.append(f"{character.name} 进行普通攻击，对 {enemy.name} 造成 {basic_damage} 点伤害！")
@@ -229,6 +231,12 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
         for key in list(cooldowns.keys()):
             if cooldowns[key] > 0:
                 cooldowns[key] -= 1
+                existing_cd = db.query(SkillCooldown).filter_by(
+                    player_id=player.id, character_id=character.id,
+                    skill_id=int(key)
+                ).first()
+                if existing_cd:
+                    existing_cd.remaining_turns = cooldowns[key]
     
     exp_gained = enemy.exp_reward if victory else 0
     gold_gained = enemy.gold_reward if victory else 0
@@ -264,6 +272,11 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
     
     db.commit()
     
+    final_cooldowns = {}
+    for key, value in cooldowns.items():
+        if value > 0:
+            final_cooldowns[key] = value
+    
     return {
         "victory": victory,
         "exp_gained": exp_gained,
@@ -272,7 +285,7 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
         "player_hp": player_current_hp,
         "enemy_hp": max(0, enemy_current_hp),
         "battle_log": battle_log,
-        "cooldowns": cooldowns
+        "cooldowns": final_cooldowns
     }
 
 

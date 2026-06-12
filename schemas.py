@@ -144,7 +144,7 @@ class SkillResponse(BaseModel):
     id: int
     name: str
     description: str
-    damage: int
+    damage: float
     mp_cost: int
     cooldown: int
     current_cooldown: int

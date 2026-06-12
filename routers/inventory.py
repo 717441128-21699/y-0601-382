@@ -109,13 +109,20 @@ def get_equipment(
 @router.post("/equip")
 def equip_item(
     data: EquipmentEquip,
+    character_id: int = 0,
     player: Player = Depends(get_current_player),
     db: Session = Depends(get_db)
 ):
     if len(player.characters) == 0:
         raise HTTPException(status_code=400, detail="请先创建角色")
     
-    character_id = player.characters[0].id
+    if character_id == 0:
+        character_id = player.characters[0].id
+    else:
+        from models import Character
+        char = db.query(Character).filter_by(id=character_id, player_id=player.id).first()
+        if not char:
+            raise HTTPException(status_code=404, detail="角色不存在或不属于当前玩家")
     
     inv = db.query(Inventory).filter_by(
         player_id=player.id, item_id=data.item_id
@@ -150,6 +157,7 @@ def equip_item(
     
     return {
         "success": True,
+        "character_id": character_id,
         "slot": data.slot,
         "item_id": data.item_id,
         "item_name": item.name,
@@ -160,13 +168,20 @@ def equip_item(
 @router.post("/unequip")
 def unequip_item(
     data: EquipmentUnequip,
+    character_id: int = 0,
     player: Player = Depends(get_current_player),
     db: Session = Depends(get_db)
 ):
     if len(player.characters) == 0:
         raise HTTPException(status_code=400, detail="请先创建角色")
     
-    character_id = player.characters[0].id
+    if character_id == 0:
+        character_id = player.characters[0].id
+    else:
+        from models import Character
+        char = db.query(Character).filter_by(id=character_id, player_id=player.id).first()
+        if not char:
+            raise HTTPException(status_code=404, detail="角色不存在或不属于当前玩家")
     
     equip = db.query(Equipment).filter_by(
         player_id=player.id, character_id=character_id, slot=data.slot
@@ -181,6 +196,7 @@ def unequip_item(
     
     return {
         "success": True,
+        "character_id": character_id,
         "slot": data.slot,
         "item_id": equip.item_id,
         "item_name": item.name if item else "未知物品",

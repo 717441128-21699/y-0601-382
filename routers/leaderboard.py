@@ -27,7 +27,7 @@ def get_all_achievements(db: Session = Depends(get_db)):
     } for a in achievements]
 
 
-@achievement_router.get("/player", response_model=list[AchievementResponse])
+@achievement_router.get("/player")
 def get_player_achievements(
     unlocked: bool = None,
     player: Player = Depends(get_current_player),
@@ -51,6 +51,65 @@ def get_player_achievements(
                 "reward_claimed": pa.reward_claimed
             })
     return result
+
+
+@achievement_router.post("/claim")
+def claim_reward(
+    data: ClaimRewardRequest,
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    result = claim_achievement_reward(db, player, data.achievement_id)
+    return result
+
+
+@achievement_router.get("/unlock_check")
+def check_unlocked_achievements(
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    from game_utils import (
+        update_level_achievement,
+        update_combat_achievement,
+        update_wealth_achievement,
+        update_quest_achievement,
+        update_main_quest_achievement,
+        update_speedrun_achievement
+    )
+    
+    update_level_achievement(db, player)
+    update_combat_achievement(db, player)
+    update_wealth_achievement(db, player)
+    update_quest_achievement(db, player)
+    update_main_quest_achievement(db, player)
+    update_speedrun_achievement(db, player)
+    
+    db.commit()
+    
+    newly_unlocked = db.query(PlayerAchievement).filter_by(
+        player_id=player.id, unlocked=True, reward_claimed=False
+    ).all()
+    
+    result = []
+    for pa in newly_unlocked:
+        ach = db.query(Achievement).filter_by(id=pa.achievement_id).first()
+        if ach:
+            result.append({
+                "id": pa.achievement_id,
+                "name": ach.name,
+                "description": ach.description,
+                "unlocked_at": pa.unlocked_at,
+                "rewards": {
+                    "exp": ach.exp_reward,
+                    "gold": ach.gold_reward
+                }
+            })
+    
+    return {
+        "success": True,
+        "unlocked_count": len(result),
+        "newly_unlocked": result
+    }
 
 
 @achievement_router.get("/{achievement_id}")
@@ -87,16 +146,6 @@ def get_achievement_detail(
             "reward_claimed": player_ach.reward_claimed if player_ach else False
         }
     }
-
-
-@achievement_router.post("/claim", response_model=ClaimRewardResponse)
-def claim_reward(
-    data: ClaimRewardRequest,
-    player: Player = Depends(get_current_player),
-    db: Session = Depends(get_db)
-):
-    result = claim_achievement_reward(db, player, data.achievement_id)
-    return result
 
 
 @router.get("/level")
@@ -337,52 +386,3 @@ def _update_leaderboard(db: Session, category: str, data: list):
         db.add(lb)
     
     db.commit()
-
-
-@achievement_router.get("/unlock_check")
-def check_unlocked_achievements(
-    player: Player = Depends(get_current_player),
-    db: Session = Depends(get_db)
-):
-    from game_utils import (
-        update_level_achievement,
-        update_combat_achievement,
-        update_wealth_achievement,
-        update_quest_achievement,
-        update_main_quest_achievement,
-        update_speedrun_achievement
-    )
-    
-    update_level_achievement(db, player)
-    update_combat_achievement(db, player)
-    update_wealth_achievement(db, player)
-    update_quest_achievement(db, player)
-    update_main_quest_achievement(db, player)
-    update_speedrun_achievement(db, player)
-    
-    db.commit()
-    
-    newly_unlocked = db.query(PlayerAchievement).filter_by(
-        player_id=player.id, unlocked=True, reward_claimed=False
-    ).all()
-    
-    result = []
-    for pa in newly_unlocked:
-        ach = db.query(Achievement).filter_by(id=pa.achievement_id).first()
-        if ach:
-            result.append({
-                "id": pa.achievement_id,
-                "name": ach.name,
-                "description": ach.description,
-                "unlocked_at": pa.unlocked_at,
-                "rewards": {
-                    "exp": ach.exp_reward,
-                    "gold": ach.gold_reward
-                }
-            })
-    
-    return {
-        "success": True,
-        "unlocked_count": len(result),
-        "newly_unlocked": result
-    }

@@ -113,8 +113,11 @@ def complete_quest(
     player: Player = Depends(get_current_player),
     db: Session = Depends(get_db)
 ):
-    pquest = db.query(PlayerQuest).filter_by(
-        player_id=player.id, quest_id=data.quest_id, status="in_progress"
+    from sqlalchemy import or_
+    pquest = db.query(PlayerQuest).filter(
+        PlayerQuest.player_id == player.id,
+        PlayerQuest.quest_id == data.quest_id,
+        or_(PlayerQuest.status == "in_progress", PlayerQuest.status == "ready_to_complete")
     ).first()
     if not pquest:
         raise HTTPException(status_code=400, detail="任务未接取或已完成")
@@ -208,21 +211,6 @@ def update_quest_progress(
 dialogue_router = APIRouter(prefix="/api/dialogue", tags=["对话选择"])
 
 
-@dialogue_router.get("/{dialogue_id}")
-def get_dialogue(dialogue_id: int, db: Session = Depends(get_db)):
-    dialogue = db.query(Dialogue).filter_by(id=dialogue_id).first()
-    if not dialogue:
-        raise HTTPException(status_code=404, detail="对话不存在")
-    
-    return {
-        "id": dialogue.id,
-        "npc_id": dialogue.npc_id,
-        "chapter": dialogue.chapter,
-        "content": dialogue.content,
-        "choices": dialogue.choices
-    }
-
-
 @dialogue_router.get("/list")
 def get_dialogue_list(chapter: int = 1, db: Session = Depends(get_db)):
     dialogues = db.query(Dialogue).filter_by(chapter=chapter).all()
@@ -232,6 +220,42 @@ def get_dialogue_list(chapter: int = 1, db: Session = Depends(get_db)):
         "chapter": d.chapter,
         "content": d.content[:50] + "..." if len(d.content) > 50 else d.content
     } for d in dialogues]
+
+
+@dialogue_router.get("/history")
+def get_dialogue_history(
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    choices = db.query(DialogueChoice).filter_by(
+        player_id=player.id
+    ).order_by(DialogueChoice.timestamp.desc()).all()
+    
+    return [{
+        "id": c.id,
+        "dialogue_id": c.dialogue_id,
+        "choice_id": c.choice_id,
+        "branch_path": c.branch_path,
+        "timestamp": c.timestamp
+    } for c in choices]
+
+
+@dialogue_router.get("/current_branch")
+def get_current_branch(
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    latest_choice = db.query(DialogueChoice).filter_by(
+        player_id=player.id
+    ).order_by(DialogueChoice.timestamp.desc()).first()
+    
+    return {
+        "chapter": player.current_chapter,
+        "chapter_progress": player.chapter_progress,
+        "current_branch": latest_choice.branch_path if latest_choice else "main",
+        "last_choice_id": latest_choice.choice_id if latest_choice else None,
+        "last_choice_time": latest_choice.timestamp if latest_choice else None
+    }
 
 
 @dialogue_router.post("/choice")
@@ -285,33 +309,29 @@ def make_choice(
     
     return {
         "success": True,
-        "choice_id": data.choice_id,
-        "branch_path": data.branch_path,
+        "choice": {
+            "id": dchoice.id,
+            "dialogue_id": dchoice.dialogue_id,
+            "choice_id": dchoice.choice_id,
+            "branch_path": dchoice.branch_path,
+            "timestamp": dchoice.timestamp
+        },
         "next_dialogue": choice_found.get("next_dialogue"),
         "quest_accepted": choice_found.get("quest_id"),
         "message": f"选择了分支: {data.branch_path}"
     }
 
 
-@dialogue_router.get("/history", response_model=list[DialogueResponse])
-def get_dialogue_history(
-    player: Player = Depends(get_current_player)
-):
-    return player.dialogue_choices
-
-
-@dialogue_router.get("/current_branch")
-def get_current_branch(
-    player: Player = Depends(get_current_player),
-    db: Session = Depends(get_db)
-):
-    latest_choice = db.query(DialogueChoice).filter_by(
-        player_id=player.id
-    ).order_by(DialogueChoice.timestamp.desc()).first()
+@dialogue_router.get("/{dialogue_id}")
+def get_dialogue(dialogue_id: int, db: Session = Depends(get_db)):
+    dialogue = db.query(Dialogue).filter_by(id=dialogue_id).first()
+    if not dialogue:
+        raise HTTPException(status_code=404, detail="对话不存在")
     
     return {
-        "chapter": player.current_chapter,
-        "chapter_progress": player.chapter_progress,
-        "current_branch": latest_choice.branch_path if latest_choice else "main",
-        "last_choice_id": latest_choice.choice_id if latest_choice else None
+        "id": dialogue.id,
+        "npc_id": dialogue.npc_id,
+        "chapter": dialogue.chapter,
+        "content": dialogue.content,
+        "choices": dialogue.choices
     }

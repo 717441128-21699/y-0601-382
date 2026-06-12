@@ -117,13 +117,74 @@ def save_game(
     }
 
 
-@router.get("/list", response_model=list[SaveGameResponse])
+@router.get("/list")
 def get_save_list(
     player: Player = Depends(get_current_player),
     db: Session = Depends(get_db)
 ):
     saves = db.query(SaveGame).filter_by(player_id=player.id).order_by(SaveGame.slot).all()
-    return saves
+    return [{
+        "id": s.id,
+        "player_id": s.player_id,
+        "slot": s.slot,
+        "name": s.name,
+        "chapter": s.chapter,
+        "play_time": s.play_time,
+        "created_at": s.created_at,
+        "data": s.data
+    } for s in saves]
+
+
+@router.get("/auto_save")
+def auto_save(
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    auto_save_data = SaveGameCreate(slot=0, name="自动存档")
+    return save_game(auto_save_data, player, db)
+
+
+@router.put("/chapter_progress")
+def update_chapter_progress(
+    data: ChapterProgress,
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    player.current_chapter = max(player.current_chapter, data.chapter)
+    player.chapter_progress = max(player.chapter_progress, data.progress)
+    db.commit()
+    
+    return {
+        "success": True,
+        "current_chapter": player.current_chapter,
+        "chapter_progress": player.chapter_progress,
+        "message": "章节进度已更新"
+    }
+
+
+@router.get("/play_time/add")
+def add_play_time(
+    seconds: int = 60,
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    player.play_time += seconds
+    
+    from game_utils import update_speedrun_achievement
+    update_speedrun_achievement(db, player)
+    
+    db.commit()
+    
+    hours = player.play_time // 3600
+    minutes = (player.play_time % 3600) // 60
+    secs = player.play_time % 60
+    
+    return {
+        "success": True,
+        "added_seconds": seconds,
+        "total_play_time": player.play_time,
+        "formatted_time": f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    }
 
 
 @router.get("/{save_id}")
@@ -279,55 +340,3 @@ def delete_save(
         "name": save_name,
         "message": "存档已删除"
     }
-
-
-@router.put("/chapter_progress")
-def update_chapter_progress(
-    data: ChapterProgress,
-    player: Player = Depends(get_current_player),
-    db: Session = Depends(get_db)
-):
-    player.current_chapter = max(player.current_chapter, data.chapter)
-    player.chapter_progress = max(player.chapter_progress, data.progress)
-    db.commit()
-    
-    return {
-        "success": True,
-        "current_chapter": player.current_chapter,
-        "chapter_progress": player.chapter_progress,
-        "message": "章节进度已更新"
-    }
-
-
-@router.get("/play_time/add")
-def add_play_time(
-    seconds: int = 60,
-    player: Player = Depends(get_current_player),
-    db: Session = Depends(get_db)
-):
-    player.play_time += seconds
-    
-    from game_utils import update_speedrun_achievement
-    update_speedrun_achievement(db, player)
-    
-    db.commit()
-    
-    hours = player.play_time // 3600
-    minutes = (player.play_time % 3600) // 60
-    secs = player.play_time % 60
-    
-    return {
-        "success": True,
-        "added_seconds": seconds,
-        "total_play_time": player.play_time,
-        "formatted_time": f"{hours:02d}:{minutes:02d}:{secs:02d}"
-    }
-
-
-@router.get("/auto_save")
-def auto_save(
-    player: Player = Depends(get_current_player),
-    db: Session = Depends(get_db)
-):
-    auto_save_data = SaveGameCreate(slot=0, name="自动存档")
-    return save_game(auto_save_data, player, db)
