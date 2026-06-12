@@ -94,8 +94,6 @@ def check_unlocked_achievements(
     ).all()
     newly_unlocked = [
         pa for pa in after_all if pa.achievement_id not in before_ids
-    ] or [
-        pa for pa in after_all if not pa.reward_claimed
     ]
 
     result = []
@@ -117,9 +115,15 @@ def check_unlocked_achievements(
                 }
             })
 
+    claimed_count = sum(1 for pa in after_all if pa.reward_claimed)
+    total_unlocked = len(after_all)
+
     return {
         "success": True,
         "unlocked_count": len(result),
+        "total_unlocked": total_unlocked,
+        "claimed_count": claimed_count,
+        "pending_claim_count": total_unlocked - claimed_count,
         "newly_unlocked": result
     }
 

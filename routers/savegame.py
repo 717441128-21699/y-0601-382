@@ -46,8 +46,10 @@ def save_game(
     for char in player.characters:
         skills = db.query(CharacterSkill).filter_by(character_id=char.id).all()
         skill_list = [{"skill_id": s.skill_id, "level": s.level} for s in skills]
+        save_key = f"{char.name}__{char.class_name}"
         character_data.append({
-            "id": char.id,
+            "__save_key": save_key,
+            "original_id": char.id,
             "name": char.name,
             "class_name": char.class_name,
             "level": char.level,
@@ -59,23 +61,43 @@ def save_game(
             "attack": char.attack,
             "defense": char.defense,
             "speed": char.speed,
+            "avatar": char.avatar,
+            "stat_points": char.stat_points or 0,
+            "added_max_hp": char.added_max_hp or 0,
+            "added_attack": char.added_attack or 0,
+            "added_defense": char.added_defense or 0,
+            "added_speed": char.added_speed or 0,
             "skills": skill_list
         })
-    
+
+    equipment_data = []
+    for eq in player.equipment:
+        char_obj = next((c for c in player.characters if c.id == eq.character_id), None)
+        save_key = f"{char_obj.name}__{char_obj.class_name}" if char_obj else None
+        equipment_data.append({
+            "character_save_key": save_key,
+            "character_id": eq.character_id,
+            "item_id": eq.item_id,
+            "slot": eq.slot
+        })
+
+    cooldown_data = []
+    for cd in player.cooldowns:
+        char_obj = next((c for c in player.characters if c.id == cd.character_id), None)
+        save_key = f"{char_obj.name}__{char_obj.class_name}" if char_obj else None
+        cooldown_data.append({
+            "character_save_key": save_key,
+            "character_id": cd.character_id,
+            "skill_id": cd.skill_id,
+            "remaining_turns": cd.remaining_turns
+        })
+
     dialogue_data = []
     for dc in player.dialogue_choices:
         dialogue_data.append({
             "dialogue_id": dc.dialogue_id,
             "choice_id": dc.choice_id,
             "branch_path": dc.branch_path
-        })
-
-    cooldown_data = []
-    for cd in player.cooldowns:
-        cooldown_data.append({
-            "character_id": cd.character_id,
-            "skill_id": cd.skill_id,
-            "remaining_turns": cd.remaining_turns
         })
 
     achievement_data = []
@@ -89,7 +111,10 @@ def save_game(
 
     battle_data = []
     for br in player.battle_records:
+        char_obj = next((c for c in player.characters if c.id == br.character_id), None)
+        save_key = f"{char_obj.name}__{char_obj.class_name}" if char_obj else None
         battle_data.append({
+            "character_save_key": save_key,
             "character_id": br.character_id,
             "enemy_id": br.enemy_id,
             "enemy_name": br.enemy_name,
@@ -99,7 +124,17 @@ def save_game(
             "exp_gained": br.exp_gained,
             "gold_gained": br.gold_gained,
             "skills_used": br.skills_used,
-            "items_dropped": br.items_dropped
+            "items_dropped": br.items_dropped,
+            "player_level_before": br.player_level_before,
+            "player_level_after": br.player_level_after,
+            "player_gold_before": br.player_gold_before,
+            "player_gold_after": br.player_gold_after,
+            "character_level_before": br.character_level_before,
+            "character_level_after": br.character_level_after,
+            "character_hp_before": br.character_hp_before,
+            "character_hp_after": br.character_hp_after,
+            "round_summary": br.round_summary,
+            "created_at": br.created_at.isoformat() if br.created_at else None
         })
 
     save_data = {
@@ -302,7 +337,9 @@ def load_game(
         db.delete(char)
 
     from models import Character, Equipment, Inventory, PlayerQuest, CharacterSkill, DialogueChoice as DC, SkillCooldown as SCD, PlayerAchievement as PA, BattleRecord as BR
-    
+    from datetime import datetime
+
+    char_id_map = {}
     for char_data in save_data.get("characters", []):
         char = Character(
             player_id=player.id,
@@ -316,11 +353,23 @@ def load_game(
             current_mp=char_data.get("current_mp", 50),
             attack=char_data.get("attack", 10),
             defense=char_data.get("defense", 5),
-            speed=char_data.get("speed", 5)
+            speed=char_data.get("speed", 5),
+            avatar=char_data.get("avatar"),
+            stat_points=char_data.get("stat_points", 0),
+            added_max_hp=char_data.get("added_max_hp", 0),
+            added_attack=char_data.get("added_attack", 0),
+            added_defense=char_data.get("added_defense", 0),
+            added_speed=char_data.get("added_speed", 0)
         )
         db.add(char)
         db.flush()
-        
+
+        save_key = char_data.get("__save_key") or f"{char_data.get('name')}__{char_data.get('class_name')}"
+        char_id_map[save_key] = char.id
+        orig_id = char_data.get("original_id") or char_data.get("id")
+        if orig_id:
+            char_id_map[f"orig:{orig_id}"] = char.id
+
         for skill_data in char_data.get("skills", []):
             cs = CharacterSkill(
                 character_id=char.id,
@@ -328,18 +377,27 @@ def load_game(
                 level=skill_data.get("level", 1)
             )
             db.add(cs)
-    
+
+    def resolve_cid(entry):
+        sk = entry.get("character_save_key")
+        if sk and sk in char_id_map:
+            return char_id_map[sk]
+        orig = entry.get("character_id")
+        if orig and f"orig:{orig}" in char_id_map:
+            return char_id_map[f"orig:{orig}"]
+        if orig and orig in char_id_map.values():
+            return orig
+        return list(char_id_map.values())[0] if char_id_map else orig
+
     for eq_data in save_data.get("equipment", []):
-        orig_cid = eq_data.get("character_id")
-        mapped_cid = char_id_map.get(orig_cid, orig_cid) if orig_cid else orig_cid
         eq = Equipment(
             player_id=player.id,
-            character_id=mapped_cid,
+            character_id=resolve_cid(eq_data),
             item_id=eq_data.get("item_id"),
             slot=eq_data.get("slot")
         )
         db.add(eq)
-    
+
     for inv_data in save_data.get("inventory", []):
         inv = Inventory(
             player_id=player.id,
@@ -347,7 +405,7 @@ def load_game(
             quantity=inv_data.get("quantity", 1)
         )
         db.add(inv)
-    
+
     for q_data in save_data.get("quests", []):
         pq = PlayerQuest(
             player_id=player.id,
@@ -357,15 +415,6 @@ def load_game(
             target_progress=q_data.get("target_progress", 1)
         )
         db.add(pq)
-
-    char_id_map = {}
-    for idx, char_data in enumerate(save_data.get("characters", [])):
-        pass
-    chars_sorted = sorted(save_data.get("characters", []), key=lambda c: c.get("id", 0))
-    db.flush()
-    loaded_chars = db.query(Character).filter_by(player_id=player.id).order_by(Character.id.asc()).all()
-    for saved_char, loaded_char in zip(chars_sorted, loaded_chars):
-        char_id_map[saved_char.get("id")] = loaded_char.id
 
     for dc_data in save_data.get("dialogue_choices", []):
         dc = DC(
@@ -377,15 +426,15 @@ def load_game(
         db.add(dc)
 
     for cd_data in save_data.get("skill_cooldowns", []):
-        orig_cid = cd_data.get("character_id")
-        mapped_cid = char_id_map.get(orig_cid, orig_cid) if orig_cid else orig_cid
-        cd = SCD(
-            player_id=player.id,
-            character_id=mapped_cid,
-            skill_id=cd_data.get("skill_id"),
-            remaining_turns=cd_data.get("remaining_turns", 0)
-        )
-        db.add(cd)
+        remaining = cd_data.get("remaining_turns", 0)
+        if remaining > 0:
+            cd = SCD(
+                player_id=player.id,
+                character_id=resolve_cid(cd_data),
+                skill_id=cd_data.get("skill_id"),
+                remaining_turns=remaining
+            )
+            db.add(cd)
 
     for pa_data in save_data.get("achievements", []):
         pa = PA(
@@ -402,11 +451,9 @@ def load_game(
         db.add(pa)
 
     for br_data in save_data.get("battle_records", []):
-        orig_cid = br_data.get("character_id")
-        mapped_cid = char_id_map.get(orig_cid, orig_cid) if orig_cid else orig_cid
         br = BR(
             player_id=player.id,
-            character_id=mapped_cid,
+            character_id=resolve_cid(br_data),
             enemy_id=br_data.get("enemy_id"),
             enemy_name=br_data.get("enemy_name"),
             enemy_level=br_data.get("enemy_level", 1),
@@ -416,10 +463,25 @@ def load_game(
             gold_gained=br_data.get("gold_gained", 0),
             skills_used=br_data.get("skills_used", []),
             items_dropped=br_data.get("items_dropped", []),
-            battle_log=[]
+            battle_log=[],
+            player_level_before=br_data.get("player_level_before", 1),
+            player_level_after=br_data.get("player_level_after", 1),
+            player_gold_before=br_data.get("player_gold_before", 0),
+            player_gold_after=br_data.get("player_gold_after", 0),
+            character_level_before=br_data.get("character_level_before", 1),
+            character_level_after=br_data.get("character_level_after", 1),
+            character_hp_before=br_data.get("character_hp_before", 0),
+            character_hp_after=br_data.get("character_hp_after", 0),
+            round_summary=br_data.get("round_summary", [])
         )
+        created_str = br_data.get("created_at")
+        if created_str:
+            try:
+                br.created_at = datetime.fromisoformat(created_str.replace('Z', '+00:00').replace('+00:00', ''))
+            except Exception:
+                pass
         db.add(br)
-    
+
     from game_utils import update_speedrun_achievement
     update_speedrun_achievement(db, player)
     

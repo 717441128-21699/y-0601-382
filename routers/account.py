@@ -138,18 +138,47 @@ def get_character(
                 "rarity": eq.item.rarity
             }
 
+    base_max_hp = character.max_hp
+    base_max_mp = character.max_mp
+    base_attack = character.attack
+    base_defense = character.defense
+    base_speed = character.speed
+    added_max_hp = character.added_max_hp or 0
+    added_attack = character.added_attack or 0
+    added_defense = character.added_defense or 0
+    added_speed = character.added_speed or 0
+    pre_eq_max_hp = base_max_hp + added_max_hp
+    pre_eq_max_mp = base_max_mp
+    pre_eq_attack = base_attack + added_attack
+    pre_eq_defense = base_defense + added_defense
+    pre_eq_speed = base_speed + added_speed
+
     return {
         "id": character.id,
         "name": character.name,
         "class_name": character.class_name,
         "level": character.level,
         "exp": character.exp,
+        "stat_points": character.stat_points or 0,
         "base_stats": {
-            "max_hp": character.max_hp,
-            "max_mp": character.max_mp,
-            "attack": character.attack,
-            "defense": character.defense,
-            "speed": character.speed
+            "max_hp": base_max_hp,
+            "max_mp": base_max_mp,
+            "attack": base_attack,
+            "defense": base_defense,
+            "speed": base_speed
+        },
+        "allocated_stats": {
+            "max_hp": added_max_hp,
+            "attack": added_attack,
+            "defense": added_defense,
+            "speed": added_speed
+        },
+        "pre_equipment_stats": {
+            "max_hp": pre_eq_max_hp,
+            "max_mp": pre_eq_max_mp,
+            "attack": pre_eq_attack,
+            "defense": pre_eq_defense,
+            "speed": pre_eq_speed
         },
         "equipment_bonus": {
             "max_hp": eq_stats.get("max_hp", 0),
@@ -159,17 +188,77 @@ def get_character(
             "speed": eq_stats.get("speed", 0)
         },
         "final_stats": {
-            "max_hp": character.max_hp + eq_stats.get("max_hp", 0),
-            "max_mp": character.max_mp + eq_stats.get("max_mp", 0),
-            "attack": character.attack + eq_stats.get("attack", 0),
-            "defense": character.defense + eq_stats.get("defense", 0),
-            "speed": character.speed + eq_stats.get("speed", 0)
+            "max_hp": pre_eq_max_hp + eq_stats.get("max_hp", 0),
+            "max_mp": pre_eq_max_mp + eq_stats.get("max_mp", 0),
+            "attack": pre_eq_attack + eq_stats.get("attack", 0),
+            "defense": pre_eq_defense + eq_stats.get("defense", 0),
+            "speed": pre_eq_speed + eq_stats.get("speed", 0)
         },
-        "current_hp": min(character.current_hp, character.max_hp + eq_stats.get("max_hp", 0)),
-        "current_mp": min(character.current_mp, character.max_mp + eq_stats.get("max_mp", 0)),
+        "current_hp": min(character.current_hp, pre_eq_max_hp + eq_stats.get("max_hp", 0)),
+        "current_mp": min(character.current_mp, pre_eq_max_mp + eq_stats.get("max_mp", 0)),
         "avatar": character.avatar,
         "equipped_items": equip_slots,
         "created_at": character.created_at
+    }
+
+
+@router.post("/character/{character_id}/allocate_stats")
+def allocate_stats(
+    character_id: int,
+    data: dict,
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    from models import Character
+    character = db.query(Character).filter_by(id=character_id, player_id=player.id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="角色不存在")
+
+    available = character.stat_points or 0
+    hp_add = max(0, int(data.get("max_hp", 0)))
+    atk_add = max(0, int(data.get("attack", 0)))
+    def_add = max(0, int(data.get("defense", 0)))
+    spd_add = max(0, int(data.get("speed", 0)))
+
+    total = hp_add + atk_add + def_add + spd_add
+    if total == 0:
+        raise HTTPException(status_code=400, detail="至少分配1点属性")
+    if total > available:
+        raise HTTPException(status_code=400, detail=f"分配点数({total})超过可用点数({available})")
+
+    character.stat_points = available - total
+    character.added_max_hp = (character.added_max_hp or 0) + hp_add
+    character.added_attack = (character.added_attack or 0) + atk_add
+    character.added_defense = (character.added_defense or 0) + def_add
+    character.added_speed = (character.added_speed or 0) + spd_add
+
+    if hp_add > 0:
+        character.current_hp = (character.current_hp or 0) + hp_add
+
+    db.commit()
+
+    from game_utils import get_equipment_stats
+    eq_stats = get_equipment_stats(db, player.id, character.id)
+    final_max_hp = character.max_hp + (character.added_max_hp or 0) + eq_stats.get("max_hp", 0)
+    character.current_hp = min(character.current_hp, final_max_hp)
+    db.commit()
+
+    return {
+        "success": True,
+        "message": f"成功分配 {total} 点属性",
+        "stat_points_remaining": character.stat_points or 0,
+        "allocated": {
+            "max_hp": hp_add,
+            "attack": atk_add,
+            "defense": def_add,
+            "speed": spd_add
+        },
+        "final_stats": {
+            "max_hp": character.max_hp + (character.added_max_hp or 0) + eq_stats.get("max_hp", 0),
+            "attack": character.attack + (character.added_attack or 0) + eq_stats.get("attack", 0),
+            "defense": character.defense + (character.added_defense or 0) + eq_stats.get("defense", 0),
+            "speed": character.speed + (character.added_speed or 0) + eq_stats.get("speed", 0)
+        }
     }
 
 

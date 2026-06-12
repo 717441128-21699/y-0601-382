@@ -52,6 +52,12 @@ class Character(Base):
     avatar = Column(String)
     created_at = Column(DateTime, server_default=func.now())
 
+    stat_points = Column(Integer, default=0)
+    added_max_hp = Column(Integer, default=0)
+    added_attack = Column(Integer, default=0)
+    added_defense = Column(Integer, default=0)
+    added_speed = Column(Integer, default=0)
+
     player = relationship("Player", back_populates="characters")
     skills = relationship("CharacterSkill", back_populates="character")
 
@@ -296,6 +302,17 @@ class BattleRecord(Base):
     skills_used = Column(JSON, default=[])
     items_dropped = Column(JSON, default=[])
     battle_log = Column(JSON, default=[])
+
+    player_level_before = Column(Integer, default=1)
+    player_level_after = Column(Integer, default=1)
+    player_gold_before = Column(Integer, default=0)
+    player_gold_after = Column(Integer, default=0)
+    character_level_before = Column(Integer, default=1)
+    character_level_after = Column(Integer, default=1)
+    character_hp_before = Column(Integer, default=0)
+    character_hp_after = Column(Integer, default=0)
+    round_summary = Column(JSON, default=[])
+
     created_at = Column(DateTime, server_default=func.now())
 
 

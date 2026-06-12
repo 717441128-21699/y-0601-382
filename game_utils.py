@@ -100,9 +100,12 @@ def get_equipment_stats(db: Session, player_id: int, character_id: int) -> dict:
 
 
 def calculate_skill_effect(skill: Skill, character: Character, equipment_stats: dict) -> dict:
-    base_attack = character.attack + equipment_stats.get("attack", 0)
+    add_attack = character.added_attack or 0
+    add_max_hp = character.added_max_hp or 0
+    base_attack = character.attack + add_attack + equipment_stats.get("attack", 0)
+    effective_max_hp = character.max_hp + add_max_hp + equipment_stats.get("max_hp", 0)
     damage = int(base_attack * skill.damage) if skill.damage > 0 else 0
-    heal = int(character.max_hp * skill.heal) if skill.heal > 0 else 0
+    heal = int(effective_max_hp * skill.heal) if skill.heal > 0 else 0
     
     return {
         "damage": damage,
@@ -122,15 +125,25 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
     cooldowns = {}
     skills_used_in_battle = []
 
+    player_level_before = player.level
+    player_gold_before = player.gold
+    character_level_before = character.level
+    character_hp_before = character.current_hp
+
     equipment_stats = get_equipment_stats(db, player.id, character.id)
+
+    add_max_hp = character.added_max_hp or 0
+    add_attack = character.added_attack or 0
+    add_defense = character.added_defense or 0
+    add_speed = character.added_speed or 0
 
     player_current_hp = character.current_hp
     player_current_mp = character.current_mp
-    player_max_hp = character.max_hp + equipment_stats.get("max_hp", 0)
+    player_max_hp = character.max_hp + add_max_hp + equipment_stats.get("max_hp", 0)
     player_max_mp = character.max_mp + equipment_stats.get("max_mp", 0)
-    player_attack = character.attack + equipment_stats.get("attack", 0)
-    player_defense = character.defense + equipment_stats.get("defense", 0)
-    player_speed = character.speed + equipment_stats.get("speed", 0)
+    player_attack = character.attack + add_attack + equipment_stats.get("attack", 0)
+    player_defense = character.defense + add_defense + equipment_stats.get("defense", 0)
+    player_speed = character.speed + add_speed + equipment_stats.get("speed", 0)
 
     enemy_current_hp = enemy.max_hp
 
@@ -147,9 +160,11 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
     victory = False
     round_num = 1
     skill_used_this_battle = False
+    round_events = []
 
     while player_current_hp > 0 and enemy_current_hp > 0 and round_num <= 50:
         battle_log.append(f"--- 第 {round_num} 回合 ---")
+        round_event = {"round": round_num, "player_action": "", "enemy_action": "", "hp_delta": 0}
 
         if player_turn:
             if skill_id and player_current_mp > 0 and not skill_used_this_battle:
@@ -172,12 +187,17 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
                             if effect["effect_type"] == "damage":
                                 actual_damage = max(1, effect["damage"] - enemy.defense)
                                 enemy_current_hp -= actual_damage
-                                battle_log.append(f"{character.name} 使用 {skill.name}，对 {enemy.name} 造成 {actual_damage} 点伤害！")
+                                msg = f"{character.name} 使用 {skill.name}，对 {enemy.name} 造成 {actual_damage} 点伤害！"
+                                battle_log.append(msg)
+                                round_event["player_action"] = msg
 
                             elif effect["effect_type"] == "heal":
                                 heal_amount = min(effect["heal"], player_max_hp - player_current_hp)
                                 player_current_hp += heal_amount
-                                battle_log.append(f"{character.name} 使用 {skill.name}，恢复了 {heal_amount} 点生命！")
+                                msg = f"{character.name} 使用 {skill.name}，恢复了 {heal_amount} 点生命！"
+                                battle_log.append(msg)
+                                round_event["player_action"] = msg
+                                round_event["hp_delta"] += heal_amount
 
                             if effect["cooldown"] > 0:
                                 existing_cd = db.query(SkillCooldown).filter_by(
@@ -202,33 +222,52 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
                         else:
                             basic_damage = max(1, player_attack - enemy.defense)
                             enemy_current_hp -= basic_damage
-                            battle_log.append(f"魔法不足！{character.name} 进行普通攻击，对 {enemy.name} 造成 {basic_damage} 点伤害！")
+                            msg = f"魔法不足！{character.name} 进行普通攻击，对 {enemy.name} 造成 {basic_damage} 点伤害！"
+                            battle_log.append(msg)
+                            round_event["player_action"] = msg
                     else:
                         if cd_remaining > 0:
-                            battle_log.append(f"{skill.name} 冷却中，剩余 {cd_remaining} 回合，只能普通攻击")
+                            msg = f"{skill.name} 冷却中，剩余 {cd_remaining} 回合，只能普通攻击"
+                            battle_log.append(msg)
+                            round_event["player_action"] = msg
                         basic_damage = max(1, player_attack - enemy.defense)
                         enemy_current_hp -= basic_damage
-                        battle_log.append(f"{character.name} 进行普通攻击，对 {enemy.name} 造成 {basic_damage} 点伤害！")
+                        msg = f"{character.name} 进行普通攻击，对 {enemy.name} 造成 {basic_damage} 点伤害！"
+                        battle_log.append(msg)
+                        if not round_event["player_action"]:
+                            round_event["player_action"] = msg
             else:
                 basic_damage = max(1, player_attack - enemy.defense)
                 enemy_current_hp -= basic_damage
-                battle_log.append(f"{character.name} 进行普通攻击，对 {enemy.name} 造成 {basic_damage} 点伤害！")
+                msg = f"{character.name} 进行普通攻击，对 {enemy.name} 造成 {basic_damage} 点伤害！"
+                battle_log.append(msg)
+                round_event["player_action"] = msg
 
             if enemy_current_hp <= 0:
                 victory = True
-                battle_log.append(f"{enemy.name} 被击败了！")
+                msg = f"{enemy.name} 被击败了！"
+                battle_log.append(msg)
+                round_event["player_action"] += " → " + msg
+                round_events.append(round_event)
                 break
         else:
             enemy_damage = max(1, enemy.attack - player_defense)
             player_current_hp -= enemy_damage
-            battle_log.append(f"{enemy.name} 攻击 {character.name}，造成 {enemy_damage} 点伤害！")
+            msg = f"{enemy.name} 攻击 {character.name}，造成 {enemy_damage} 点伤害！"
+            battle_log.append(msg)
+            round_event["enemy_action"] = msg
+            round_event["hp_delta"] -= enemy_damage
 
             if player_current_hp <= 0:
-                battle_log.append(f"{character.name} 倒下了...")
+                msg = f"{character.name} 倒下了..."
+                battle_log.append(msg)
+                round_event["enemy_action"] += " → " + msg
+                round_events.append(round_event)
                 break
 
         player_turn = not player_turn
         round_num += 1
+        round_events.append(round_event)
 
         for key in list(cooldowns.keys()):
             if cooldowns[key] > 0:
@@ -269,7 +308,8 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
 
         level_ups = check_level_up(player)
         for lv in level_ups:
-            battle_log.append(f"恭喜！升级到 {lv} 级！")
+            msg = f"恭喜！升级到 {lv} 级！"
+            battle_log.append(msg)
             update_character_stats_on_level(db, character, 1)
 
         if len(level_ups) > 0:
@@ -277,6 +317,11 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
         update_kill_achievement(db, player, enemy.id)
         update_combat_achievement(db, player)
         update_wealth_achievement(db, player)
+
+    player_level_after = player.level
+    player_gold_after = player.gold
+    character_level_after = character.level
+    character_hp_after = character.current_hp
 
     record = BattleRecord(
         player_id=player.id,
@@ -290,7 +335,20 @@ def process_battle(db: Session, player: Player, character: Character, enemy: Ene
         gold_gained=gold_gained,
         skills_used=skills_used_in_battle,
         items_dropped=items_gained,
-        battle_log=battle_log
+        battle_log=battle_log,
+        player_level_before=player_level_before,
+        player_level_after=player_level_after,
+        player_gold_before=player_gold_before,
+        player_gold_after=player_gold_after,
+        character_level_before=character_level_before,
+        character_level_after=character_level_after,
+        character_hp_before=character_hp_before,
+        character_hp_after=character_hp_after,
+        round_summary=[{
+            "round": e.get("round"),
+            "summary": (e.get("player_action", "") + " | " + e.get("enemy_action", "")).strip(" | "),
+            "hp_delta": e.get("hp_delta", 0)
+        } for e in round_events if (e.get("player_action") or e.get("enemy_action"))]
     )
     db.add(record)
 
@@ -326,7 +384,8 @@ def update_character_stats_on_level(db: Session, character: Character, levels: i
             character.attack += class_data.attack_per_level
             character.defense += class_data.defense_per_level
             character.speed += class_data.speed_per_level
-            
+            character.stat_points += 3
+
             from models import Skill, CharacterSkill
             new_skills = db.query(Skill).filter(
                 Skill.class_name == character.class_name,

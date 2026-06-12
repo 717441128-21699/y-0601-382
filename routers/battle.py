@@ -130,10 +130,14 @@ def simulate_battle(
         raise HTTPException(status_code=404, detail="敌人不存在")
     
     equipment_stats = get_equipment_stats(db, player.id, character_id)
-    player_attack = character.attack + equipment_stats.get("attack", 0)
-    player_defense = character.defense + equipment_stats.get("defense", 0)
-    player_speed = character.speed + equipment_stats.get("speed", 0)
-    player_max_hp = character.max_hp + equipment_stats.get("max_hp", 0)
+    add_max_hp = character.added_max_hp or 0
+    add_attack = character.added_attack or 0
+    add_defense = character.added_defense or 0
+    add_speed = character.added_speed or 0
+    player_attack = character.attack + add_attack + equipment_stats.get("attack", 0)
+    player_defense = character.defense + add_defense + equipment_stats.get("defense", 0)
+    player_speed = character.speed + add_speed + equipment_stats.get("speed", 0)
+    player_max_hp = character.max_hp + add_max_hp + equipment_stats.get("max_hp", 0)
     player_max_mp = character.max_mp + equipment_stats.get("max_mp", 0)
     
     estimated_damage = max(1, player_attack - enemy.defense)
@@ -273,7 +277,13 @@ def reset_cooldowns(
 @router.get("/records/{character_id}")
 def get_battle_records(
     character_id: int,
-    limit: int = 20,
+    limit: int = 50,
+    offset: int = 0,
+    victory: bool = None,
+    min_level: int = None,
+    max_level: int = None,
+    from_date: str = None,
+    to_date: str = None,
     player: Player = Depends(get_current_player),
     db: Session = Depends(get_db)
 ):
@@ -282,9 +292,33 @@ def get_battle_records(
     if not character:
         raise HTTPException(status_code=404, detail="角色不存在")
 
-    records = db.query(BattleRecord).filter_by(
+    query = db.query(BattleRecord).filter_by(
         player_id=player.id, character_id=character_id
-    ).order_by(BattleRecord.created_at.desc()).limit(limit).all()
+    )
+
+    if victory is not None:
+        query = query.filter(BattleRecord.victory == victory)
+    if min_level is not None:
+        query = query.filter(BattleRecord.enemy_level >= min_level)
+    if max_level is not None:
+        query = query.filter(BattleRecord.enemy_level <= max_level)
+    if from_date:
+        from datetime import datetime
+        try:
+            dt = datetime.fromisoformat(from_date.replace('Z', '+00:00').replace('+00:00', ''))
+            query = query.filter(BattleRecord.created_at >= dt)
+        except Exception:
+            pass
+    if to_date:
+        from datetime import datetime
+        try:
+            dt = datetime.fromisoformat(to_date.replace('Z', '+00:00').replace('+00:00', ''))
+            query = query.filter(BattleRecord.created_at <= dt)
+        except Exception:
+            pass
+
+    total = query.count()
+    records = query.order_by(BattleRecord.created_at.desc()).offset(offset).limit(limit).all()
 
     result = []
     for rec in records:
@@ -296,22 +330,67 @@ def get_battle_records(
 
         result.append({
             "id": rec.id,
-            "enemy_id": rec.enemy_id,
-            "enemy_name": rec.enemy_name,
-            "enemy_level": rec.enemy_level,
-            "victory": rec.victory,
-            "rounds": rec.rounds,
-            "exp_gained": rec.exp_gained,
-            "gold_gained": rec.gold_gained,
+            "timestamp": rec.created_at.isoformat() if rec.created_at else None,
+            "enemy": {
+                "id": rec.enemy_id,
+                "name": rec.enemy_name,
+                "level": rec.enemy_level
+            },
+            "result": {
+                "victory": rec.victory,
+                "rounds": rec.rounds
+            },
+            "rewards": {
+                "exp": rec.exp_gained,
+                "gold": rec.gold_gained,
+                "items": rec.items_dropped or []
+            },
+            "stats_change": {
+                "player_level": {
+                    "before": rec.player_level_before or 1,
+                    "after": rec.player_level_after or 1
+                },
+                "player_gold": {
+                    "before": rec.player_gold_before or 0,
+                    "after": rec.player_gold_after or 0,
+                    "delta": (rec.player_gold_after or 0) - (rec.player_gold_before or 0)
+                },
+                "character_level": {
+                    "before": rec.character_level_before or 1,
+                    "after": rec.character_level_after or 1
+                },
+                "character_hp": {
+                    "before": rec.character_hp_before or 0,
+                    "after": rec.character_hp_after or 0
+                }
+            },
             "skills_used": skill_details,
-            "items_dropped": rec.items_dropped or [],
-            "battle_log_tail": (rec.battle_log or [])[-10:],
-            "created_at": rec.created_at
+            "round_summary": rec.round_summary or [],
+            "battle_log_tail": (rec.battle_log or [])[-10:]
         })
+
+    stats = {
+        "total_battles": total,
+        "filtered_count": len(result),
+        "wins": sum(1 for r in records if r.victory),
+        "losses": sum(1 for r in records if not r.victory),
+        "total_exp": sum(r.exp_gained for r in records),
+        "total_gold": sum(r.gold_gained for r in records)
+    }
+    if len(records) > 0:
+        stats["win_rate"] = round(stats["wins"] / len(records), 2)
+    else:
+        stats["win_rate"] = 0.0
 
     return {
         "character_id": character_id,
         "character_name": character.name,
-        "total_records": len(result),
+        "pagination": {
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "returned": len(result)
+        },
+        "aggregate_stats": stats,
         "records": result
     }
