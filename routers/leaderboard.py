@@ -70,26 +70,34 @@ def check_unlocked_achievements(
 ):
     from game_utils import (
         update_level_achievement,
-        update_combat_achievement,
-        update_wealth_achievement,
         update_quest_achievement,
         update_main_quest_achievement,
         update_speedrun_achievement
     )
-    
+
+    before_ids = set(
+        pa.achievement_id for pa in
+        db.query(PlayerAchievement).filter_by(
+            player_id=player.id, unlocked=True
+        ).all()
+    )
+
     update_level_achievement(db, player)
-    update_combat_achievement(db, player)
-    update_wealth_achievement(db, player)
     update_quest_achievement(db, player)
     update_main_quest_achievement(db, player)
     update_speedrun_achievement(db, player)
-    
+
     db.commit()
-    
-    newly_unlocked = db.query(PlayerAchievement).filter_by(
-        player_id=player.id, unlocked=True, reward_claimed=False
+
+    after_all = db.query(PlayerAchievement).filter_by(
+        player_id=player.id, unlocked=True
     ).all()
-    
+    newly_unlocked = [
+        pa for pa in after_all if pa.achievement_id not in before_ids
+    ] or [
+        pa for pa in after_all if not pa.reward_claimed
+    ]
+
     result = []
     for pa in newly_unlocked:
         ach = db.query(Achievement).filter_by(id=pa.achievement_id).first()
@@ -98,13 +106,17 @@ def check_unlocked_achievements(
                 "id": pa.achievement_id,
                 "name": ach.name,
                 "description": ach.description,
+                "category": ach.category,
+                "condition_type": ach.condition_type,
+                "condition_value": ach.condition_value,
+                "progress": pa.progress,
                 "unlocked_at": pa.unlocked_at,
                 "rewards": {
                     "exp": ach.exp_reward,
                     "gold": ach.gold_reward
                 }
             })
-    
+
     return {
         "success": True,
         "unlocked_count": len(result),

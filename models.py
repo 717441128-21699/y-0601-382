@@ -30,6 +30,7 @@ class Player(Base):
     save_games = relationship("SaveGame", back_populates="player")
     achievements = relationship("PlayerAchievement", back_populates="player")
     cooldowns = relationship("SkillCooldown", back_populates="player")
+    battle_records = relationship("BattleRecord", backref="player")
 
 
 class Character(Base):
@@ -277,6 +278,25 @@ class PlayerAchievement(Base):
 
     player = relationship("Player", back_populates="achievements")
     achievement = relationship("Achievement")
+
+
+class BattleRecord(Base):
+    __tablename__ = "battle_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    player_id = Column(Integer, ForeignKey("players.id"), nullable=False)
+    character_id = Column(Integer, ForeignKey("characters.id"), nullable=False)
+    enemy_id = Column(Integer, ForeignKey("enemies.id"), nullable=False)
+    enemy_name = Column(String)
+    enemy_level = Column(Integer, default=1)
+    victory = Column(Boolean, default=False)
+    rounds = Column(Integer, default=0)
+    exp_gained = Column(Integer, default=0)
+    gold_gained = Column(Integer, default=0)
+    skills_used = Column(JSON, default=[])
+    items_dropped = Column(JSON, default=[])
+    battle_log = Column(JSON, default=[])
+    created_at = Column(DateTime, server_default=func.now())
 
 
 class Leaderboard(Base):

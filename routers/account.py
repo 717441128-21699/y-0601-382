@@ -113,17 +113,64 @@ def get_characters(player: Player = Depends(get_current_player)):
     return player.characters
 
 
-@router.get("/character/{character_id}", response_model=CharacterResponse)
+@router.get("/character/{character_id}")
 def get_character(
     character_id: int,
     player: Player = Depends(get_current_player),
     db: Session = Depends(get_db)
 ):
-    from models import Character
+    from models import Character, Equipment
     character = db.query(Character).filter_by(id=character_id, player_id=player.id).first()
     if not character:
         raise HTTPException(status_code=404, detail="角色不存在")
-    return character
+
+    from game_utils import get_equipment_stats
+    eq_stats = get_equipment_stats(db, player.id, character.id)
+    equipment = db.query(Equipment).filter_by(
+        player_id=player.id, character_id=character.id
+    ).all()
+    equip_slots = {}
+    for eq in equipment:
+        if eq.item:
+            equip_slots[eq.slot] = {
+                "item_id": eq.item_id,
+                "name": eq.item.name,
+                "rarity": eq.item.rarity
+            }
+
+    return {
+        "id": character.id,
+        "name": character.name,
+        "class_name": character.class_name,
+        "level": character.level,
+        "exp": character.exp,
+        "base_stats": {
+            "max_hp": character.max_hp,
+            "max_mp": character.max_mp,
+            "attack": character.attack,
+            "defense": character.defense,
+            "speed": character.speed
+        },
+        "equipment_bonus": {
+            "max_hp": eq_stats.get("max_hp", 0),
+            "max_mp": eq_stats.get("max_mp", 0),
+            "attack": eq_stats.get("attack", 0),
+            "defense": eq_stats.get("defense", 0),
+            "speed": eq_stats.get("speed", 0)
+        },
+        "final_stats": {
+            "max_hp": character.max_hp + eq_stats.get("max_hp", 0),
+            "max_mp": character.max_mp + eq_stats.get("max_mp", 0),
+            "attack": character.attack + eq_stats.get("attack", 0),
+            "defense": character.defense + eq_stats.get("defense", 0),
+            "speed": character.speed + eq_stats.get("speed", 0)
+        },
+        "current_hp": min(character.current_hp, character.max_hp + eq_stats.get("max_hp", 0)),
+        "current_mp": min(character.current_mp, character.max_mp + eq_stats.get("max_mp", 0)),
+        "avatar": character.avatar,
+        "equipped_items": equip_slots,
+        "created_at": character.created_at
+    }
 
 
 @router.put("/character/{character_id}/avatar")

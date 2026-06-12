@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
-from models import Player, Enemy, Skill, CharacterSkill, SkillCooldown
+from models import Player, Enemy, Skill, CharacterSkill, SkillCooldown, BattleRecord
 from schemas import BattleRequest, BattleResponse, SkillResponse
 from routers.account import get_current_player
 from game_utils import process_battle, calculate_skill_effect, get_equipment_stats
@@ -254,17 +254,64 @@ def reset_cooldowns(
     db: Session = Depends(get_db)
 ):
     character_id = data.get("character_id")
-    
+
     cooldowns = db.query(SkillCooldown).filter_by(
         player_id=player.id, character_id=character_id
     ).all()
-    
+
     for cd in cooldowns:
         db.delete(cd)
-    
+
     db.commit()
-    
+
     return {
         "success": True,
         "message": "所有技能冷却已重置"
+    }
+
+
+@router.get("/records/{character_id}")
+def get_battle_records(
+    character_id: int,
+    limit: int = 20,
+    player: Player = Depends(get_current_player),
+    db: Session = Depends(get_db)
+):
+    from models import Character
+    character = db.query(Character).filter_by(id=character_id, player_id=player.id).first()
+    if not character:
+        raise HTTPException(status_code=404, detail="角色不存在")
+
+    records = db.query(BattleRecord).filter_by(
+        player_id=player.id, character_id=character_id
+    ).order_by(BattleRecord.created_at.desc()).limit(limit).all()
+
+    result = []
+    for rec in records:
+        skill_details = []
+        for sid in rec.skills_used or []:
+            sk = db.query(Skill).filter_by(id=sid).first()
+            if sk:
+                skill_details.append({"id": sk.id, "name": sk.name})
+
+        result.append({
+            "id": rec.id,
+            "enemy_id": rec.enemy_id,
+            "enemy_name": rec.enemy_name,
+            "enemy_level": rec.enemy_level,
+            "victory": rec.victory,
+            "rounds": rec.rounds,
+            "exp_gained": rec.exp_gained,
+            "gold_gained": rec.gold_gained,
+            "skills_used": skill_details,
+            "items_dropped": rec.items_dropped or [],
+            "battle_log_tail": (rec.battle_log or [])[-10:],
+            "created_at": rec.created_at
+        })
+
+    return {
+        "character_id": character_id,
+        "character_name": character.name,
+        "total_records": len(result),
+        "records": result
     }
